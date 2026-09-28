@@ -38,6 +38,7 @@ from app.models.query import Query
 from app.models.report import Report
 from app.models.session import Session
 from app.schemas.assets import ImageModality
+from app.schemas.sessions import SessionState
 from app.schemas.workflows import WorkflowType
 
 setup_logging()
@@ -126,16 +127,6 @@ async def seed(dry_run: bool = False, force: bool = False, db_session: AsyncSess
     storage = get_storage()
 
     async with db_cm as db:
-        # Ensure findings table has answer, properties, evidence_refs columns
-        try:
-            await db.execute(text("ALTER TABLE findings ADD COLUMN IF NOT EXISTS answer VARCHAR"))
-            await db.execute(text("ALTER TABLE findings ADD COLUMN IF NOT EXISTS properties JSONB DEFAULT '{}'::jsonb"))
-            await db.execute(text("ALTER TABLE findings ADD COLUMN IF NOT EXISTS evidence_refs JSONB DEFAULT '[]'::jsonb"))
-            await db.commit()
-        except Exception as e:
-            logger.warning("ensure_columns_failed", error=str(e))
-            await db.rollback()
-
         existing = await db.execute(select(Session).where(Session.session_id == DEMO_SESSION_ID))
         if existing.scalars().first():
             if not force:
@@ -172,30 +163,46 @@ async def seed(dry_run: bool = False, force: bool = False, db_session: AsyncSess
         import shutil
         derived_dir = Path(settings.storage_local_root) / "derived"
         derived_dir.mkdir(parents=True, exist_ok=True)
-        for asset_id, src_file in [
-            (DEMO_ASSET_OPT_22_ID, opt_22_file),
-            (DEMO_ASSET_OPT_26_ID, opt_26_file),
-            (DEMO_ASSET_SAR_26_ID, sar_26_file),
-        ]:
+        preview_sources = [
+            (DEMO_ASSET_OPT_22_ID, "isro_bengaluru_2022.jpg", opt_22_file),
+            (DEMO_ASSET_OPT_26_ID, "isro_bengaluru_2026.jpg", opt_26_file),
+            (DEMO_ASSET_SAR_26_ID, "isro_sar.png", sar_26_file),
+        ]
+        for asset_id, demo_tile_name, src_file in preview_sources:
             target_preview = derived_dir / f"{asset_id}_1024.png"
             if not target_preview.exists():
                 try:
-                    if src_file.exists() and src_file.suffix.lower() == ".tif":
-                        generate_rgb_preview(src_file, target_preview, max_dimension=1024)
-                    else:
-                        for fallback in [
-                            Path(__file__).parent.parent / "data" / "demo-tiles" / "isro_bengaluru_2022.jpg",
-                            Path(__file__).parent.parent / "sample_data" / "preview.png",
+                    copied = False
+                    for search_dir in [
+                        Path(__file__).parent.parent / "data" / "demo-tiles",
+                        Path("/app/data/demo-tiles"),
+                        Path(__file__).parent.parent / "sample_data",
+                        Path("/app/sample_data"),
+                    ]:
+                        cand = search_dir / demo_tile_name
+                        if cand.exists():
+                            shutil.copy2(cand, target_preview)
+                            copied = True
+                            break
+                    if not copied:
+                        for search_dir in [
+                            Path(__file__).parent.parent / "sample_data",
+                            Path("/app/sample_data"),
                         ]:
-                            if fallback.exists():
-                                shutil.copy2(fallback, target_preview)
+                            cand = search_dir / "preview.png"
+                            if cand.exists():
+                                shutil.copy2(cand, target_preview)
+                                copied = True
                                 break
+                    if not copied and src_file.exists() and src_file.suffix.lower() == ".tif":
+                        generate_rgb_preview(src_file, target_preview, max_dimension=1024)
                 except Exception as exc:
                     logger.warning("pregenerate_previews_error", asset_id=asset_id, error=str(exc))
 
         # ── 3. Session ────────────────────────────────────────────────────────
         demo_session = Session(
             session_id=DEMO_SESSION_ID,
+            state=SessionState.active,
             conversation_history=[
                 {
                     "role": "user",

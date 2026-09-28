@@ -43,6 +43,18 @@ services:
     container_name: satquery_api
     expose:
       - "8000"
+    command: >
+      sh -c "alembic upgrade head || true &&
+             gunicorn app.main:app
+             --workers 2
+             --worker-class uvicorn.workers.UvicornWorker
+             --threads 2
+             --timeout 120
+             --keep-alive 5
+             --bind 0.0.0.0:8000
+             --access-logfile -
+             --error-logfile -
+             --log-level info"
     env_file:
       - .env.prod
     environment:
@@ -55,8 +67,6 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
-      migrate:
-        condition: service_completed_successfully
     restart: unless-stopped
 
   worker:
@@ -77,8 +87,6 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
-      migrate:
-        condition: service_completed_successfully
     restart: unless-stopped
 
   frontend:
