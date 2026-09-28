@@ -27,8 +27,9 @@ name: Deploy SatQuery AI
 on:
   push:
     branches:
-      - deploy         # Only the `deploy` branch triggers production deploys
-  workflow_dispatch:   # Allows a manual trigger from the GitHub Actions UI
+      - master         # Push to master branch triggers automatic deployment
+      - deploy         # Keep deploy branch as trigger option
+  workflow_dispatch:   # Allows manual trigger from GitHub Actions UI
 
 # Prevent two simultaneous deployments from racing each other
 concurrency:
