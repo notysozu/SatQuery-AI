@@ -157,9 +157,12 @@ class Settings(BaseSettings):
         secret_api_key = _read_secret("api_key", "")
         if secret_api_key:
             self.api_key = secret_api_key
-        self.openai_api_key = _read_secret("openai_api_key", self.openai_api_key)
         self.google_api_key = _read_secret("gemini_api_key", self.google_api_key)
         self.gemini_api_key = _read_secret("gemini_api_key", self.gemini_api_key)
+        if not self.google_api_key and self.gemini_api_key:
+            self.google_api_key = self.gemini_api_key
+        if not self.gemini_api_key and self.google_api_key:
+            self.gemini_api_key = self.google_api_key
 
         # S3 / MinIO credentials: check standard AWS env vars first, then Docker secrets
         aws_key = os.environ.get("AWS_ACCESS_KEY_ID") or os.environ.get("S3_ACCESS_KEY")
