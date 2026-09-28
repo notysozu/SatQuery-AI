@@ -24,21 +24,25 @@ def upgrade() -> None:
     # Enable PostGIS extension (idempotent).
     op.execute("CREATE EXTENSION IF NOT EXISTS postgis")
 
-    # ── Enum types ────────────────────────────────────────────────────────────
-    sessionstate = postgresql.ENUM("active", "idle", "closed", name="sessionstate", create_type=False)
-    sessionstate.create(op.get_bind(), checkfirst=True)
-
-    imagemodality = postgresql.ENUM(
-        "optical", "sar", "multispectral", "hyperspectral", "unknown",
-        name="imagemodality", create_type=False,
-    )
-    imagemodality.create(op.get_bind(), checkfirst=True)
-
-    workflowtype = postgresql.ENUM(
-        "vqa", "captioning", "grounding", "change_detection", "sar_fusion",
-        name="workflowtype", create_type=False,
-    )
-    workflowtype.create(op.get_bind(), checkfirst=True)
+    # ── Enum types (idempotent creation) ──────────────────────────────────────
+    op.execute("""
+        DO $$ BEGIN
+            CREATE TYPE sessionstate AS ENUM ('active', 'idle', 'closed');
+        EXCEPTION WHEN duplicate_object THEN null;
+        END $$;
+    """)
+    op.execute("""
+        DO $$ BEGIN
+            CREATE TYPE imagemodality AS ENUM ('optical', 'sar', 'multispectral', 'hyperspectral', 'unknown');
+        EXCEPTION WHEN duplicate_object THEN null;
+        END $$;
+    """)
+    op.execute("""
+        DO $$ BEGIN
+            CREATE TYPE workflowtype AS ENUM ('vqa', 'captioning', 'grounding', 'change_detection', 'sar_fusion');
+        EXCEPTION WHEN duplicate_object THEN null;
+        END $$;
+    """)
 
     # ── users ─────────────────────────────────────────────────────────────────
     op.create_table(
@@ -57,7 +61,7 @@ def upgrade() -> None:
         "sessions",
         sa.Column("session_id", sa.String(), nullable=False),
         sa.Column("user_id", sa.String(), nullable=True),
-        sa.Column("state", sa.Enum("active", "idle", "closed", name="sessionstate"), nullable=False),
+        sa.Column("state", postgresql.ENUM("active", "idle", "closed", name="sessionstate", create_type=False), nullable=False),
         sa.Column("conversation_history", postgresql.JSONB(astext_type=sa.Text()), nullable=False),
         sa.Column("created_at", sa.DateTime(), nullable=False),
         sa.Column("updated_at", sa.DateTime(), nullable=False),
@@ -72,7 +76,7 @@ def upgrade() -> None:
         sa.Column("uri", sa.String(), nullable=False),
         sa.Column(
             "modality",
-            sa.Enum("optical", "sar", "multispectral", "hyperspectral", "unknown", name="imagemodality"),
+            postgresql.ENUM("optical", "sar", "multispectral", "hyperspectral", "unknown", name="imagemodality", create_type=False),
             nullable=False,
         ),
         sa.Column("crs", sa.String(), nullable=True),
@@ -114,7 +118,7 @@ def upgrade() -> None:
         sa.Column("query_id", sa.String(), nullable=False),
         sa.Column(
             "workflow",
-            sa.Enum("vqa", "captioning", "grounding", "change_detection", "sar_fusion", name="workflowtype"),
+            postgresql.ENUM("vqa", "captioning", "grounding", "change_detection", "sar_fusion", name="workflowtype", create_type=False),
             nullable=True,
         ),
         sa.Column("plan", sa.String(), nullable=True),
