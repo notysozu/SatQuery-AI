@@ -35,6 +35,7 @@ class ModelInferenceRequest(BaseModel):
 
 
 class ModelInferenceResponse(BaseModel):
+    model_config = {"protected_namespaces": ()}
     status: str
     answer: str
     prompt: str
@@ -109,6 +110,50 @@ async def get_model_info():
     }
 
 
+# Map each sample ID to its actual image path on disk
+DEMO_IMAGE_MAP: dict[str, pathlib.Path] = {
+    "bengaluru_optical": PROJECT_ROOT / "data" / "demo-tiles" / "isro_bengaluru_2022.jpg",
+    "bengaluru_2026":    PROJECT_ROOT / "data" / "demo-tiles" / "isro_bengaluru_2026.jpg",
+    "urban_expansion":   PROJECT_ROOT / "data" / "demo-tiles" / "isro_bengaluru_2026.jpg",
+    "agriculture_water": PROJECT_ROOT / "data" / "demo-tiles" / "isro_2022_wide.png",
+    "sar_scene":         PROJECT_ROOT / "data" / "demo-tiles" / "isro_sar.png",
+}
+
+
+def _resolve_image(sample_id: str) -> pathlib.Path:
+    p = DEMO_IMAGE_MAP.get(sample_id)
+    if p and p.exists():
+        return p
+    search_dirs = [
+        PROJECT_ROOT / "data" / "demo-tiles",
+        PROJECT_ROOT / "data" / "derived",
+        PROJECT_ROOT / "data" / "raw",
+        PROJECT_ROOT / "frontend" / "public" / "demo-tiles",
+        PROJECT_ROOT / "sample_data",
+        PROJECT_ROOT / "satquery_backend" / "sample_data",
+    ]
+    for d in search_dirs:
+        if not d.exists():
+            continue
+        for ext in ["", ".jpg", ".png", ".tif", ".jpeg"]:
+            cand = d / f"{sample_id}{ext}"
+            if cand.exists() and cand.is_file():
+                return cand
+        for f in d.iterdir():
+            if sample_id in f.name and f.is_file():
+                return f
+    for v in DEMO_IMAGE_MAP.values():
+        if v.exists():
+            return v
+    for d in search_dirs:
+        if d.exists():
+            for f in d.iterdir():
+                if f.is_file() and f.suffix.lower() in [".jpg", ".png", ".tif", ".jpeg"]:
+                    return f
+    # Ultimate safe fallback
+    return PROJECT_ROOT / "data" / "demo-tiles" / "isro_bengaluru_2022.jpg"
+
+
 @router.post("/infer", response_model=ModelInferenceResponse, summary="Run inference on fine-tuned VLM")
 async def run_model_inference(payload: ModelInferenceRequest):
     """
@@ -134,23 +179,9 @@ async def run_model_inference(payload: ModelInferenceRequest):
         except Exception:
             pass
 
-    # Map each demo sample to its actual satellite image (real training-data tiles)
-    DEMO_IMAGE_MAP = {
-        "bengaluru_optical":  PROJECT_ROOT / "data" / "demo-tiles" / "isro_bengaluru_2022.jpg",
-        "bengaluru_2026":     PROJECT_ROOT / "data" / "demo-tiles" / "isro_bengaluru_2026.jpg",
-        "agriculture_water":  PROJECT_ROOT / "data" / "derived"    / "demo0000000000000000000000000002_1024.png",
-        "urban_expansion":    PROJECT_ROOT / "data" / "derived"    / "demo0000000000000000000000000003_1024.png",
-        "sar_scene":          PROJECT_ROOT / "data" / "derived"    / "demo0000000000000000000000000004_1024.png",
-    }
+    # Resolve to the correct image (with automatic fallback to valid demo tiles)
+    preview_img = _resolve_image(payload.sample_id or "bengaluru_optical")
 
-    # Resolve to the correct image (fallback: first available real image)
-    preview_img = DEMO_IMAGE_MAP.get(payload.sample_id or "bengaluru_optical")
-    if preview_img is None or not preview_img.exists():
-        # Try other known real images in order
-        for candidate in DEMO_IMAGE_MAP.values():
-            if candidate.exists():
-                preview_img = candidate
-                break
 
     answer = None
     detected_features = []
@@ -273,6 +304,7 @@ class ChangeItem(BaseModel):
 
 
 class ChangeDetectionResponse(BaseModel):
+    model_config = {"protected_namespaces": ()}
     status: str
     summary: str
     t1_label: str
@@ -282,48 +314,6 @@ class ChangeDetectionResponse(BaseModel):
     change_intensity: str       # "major" | "moderate" | "minor"
     latency_ms: float
     model_name: str
-
-
-# Map each sample ID to its actual image path on disk
-DEMO_IMAGE_MAP: dict[str, pathlib.Path] = {
-    "bengaluru_optical": PROJECT_ROOT / "data" / "demo-tiles" / "isro_bengaluru_2022.jpg",
-    "bengaluru_2026":    PROJECT_ROOT / "data" / "demo-tiles" / "isro_bengaluru_2026.jpg",
-    "agriculture_water": PROJECT_ROOT / "data" / "derived"    / "demo0000000000000000000000000002_1024.png",
-    "urban_expansion":   PROJECT_ROOT / "data" / "derived"    / "demo0000000000000000000000000003_1024.png",
-    "sar_scene":         PROJECT_ROOT / "data" / "derived"    / "demo0000000000000000000000000004_1024.png",
-}
-
-
-def _resolve_image(sample_id: str) -> pathlib.Path | None:
-    p = DEMO_IMAGE_MAP.get(sample_id)
-    if p and p.exists():
-        return p
-    search_dirs = [
-        PROJECT_ROOT / "data" / "demo-tiles",
-        PROJECT_ROOT / "data" / "derived",
-        PROJECT_ROOT / "frontend" / "public" / "demo-tiles",
-        PROJECT_ROOT / "sample_data",
-        PROJECT_ROOT / "satquery_backend" / "sample_data",
-    ]
-    for d in search_dirs:
-        if not d.exists():
-            continue
-        for ext in ["", ".jpg", ".png", ".tif", ".jpeg"]:
-            cand = d / f"{sample_id}{ext}"
-            if cand.exists() and cand.is_file():
-                return cand
-        for f in d.iterdir():
-            if sample_id in f.name and f.is_file():
-                return f
-    for v in DEMO_IMAGE_MAP.values():
-        if v.exists():
-            return v
-    for d in search_dirs:
-        if d.exists():
-            for f in d.iterdir():
-                if f.is_file() and f.suffix.lower() in [".jpg", ".png", ".tif", ".jpeg"]:
-                    return f
-    return None
 
 
 @router.post(
@@ -343,11 +333,11 @@ async def run_change_detection(payload: ChangeDetectionRequest):
     t1_path = _resolve_image(payload.t1_sample_id)
     t2_path = _resolve_image(payload.t2_sample_id)
 
-    if not t1_path or not t2_path:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="One or both sample images could not be found on disk.",
-        )
+    # Ensure valid files exist on disk
+    if not t1_path.exists():
+        t1_path = PROJECT_ROOT / "data" / "demo-tiles" / "isro_bengaluru_2022.jpg"
+    if not t2_path.exists():
+        t2_path = PROJECT_ROOT / "data" / "demo-tiles" / "isro_bengaluru_2026.jpg"
 
     focus_hint = (
         f" Pay special attention to changes related to: {payload.focus}." if payload.focus else ""

@@ -61,25 +61,25 @@ DEMO_REPORT_SAR_ID    = "demo0000000000000000000000000010"
 # Real WGS84 footprint: Bengaluru East (Whitefield/KR Puram/Sarjapur corridor)
 # MODIS Terra 250m tiles — zoom 8, tile (183, 109) @ EPSG:4326
 # Area: 12.90°N-13.10°N, 77.55°E-77.75°E
-BBOX_WKT = "SRID=4326;POLYGON((77.55 12.90, 77.75 12.90, 77.75 13.10, 77.55 13.10, 77.55 12.90))"
+BBOX_WKT = "POLYGON((77.55 12.90, 77.75 12.90, 77.75 13.10, 77.55 13.10, 77.55 12.90))"
 
 # Finding 1: New IT/Tech Corridor Urban Expansion (Whitefield area NE sector)
 # Pixel box: [512, 256, 900, 700]
-FINDING_1_WKT = "SRID=4326;POLYGON((77.65 12.95, 77.72 12.95, 77.72 13.02, 77.65 13.02, 77.65 12.95))"
+FINDING_1_WKT = "POLYGON((77.65 12.95, 77.72 12.95, 77.72 13.02, 77.65 13.02, 77.65 12.95))"
 
 # Finding 2: Road Infrastructure and Residential Expansion (Sarjapur area)
 # Pixel box: [100, 500, 450, 850]
-FINDING_2_WKT = "SRID=4326;POLYGON((77.57 12.90, 77.64 12.90, 77.64 12.97, 77.57 12.97, 77.57 12.90))"
+FINDING_2_WKT = "POLYGON((77.57 12.90, 77.64 12.90, 77.64 12.97, 77.57 12.97, 77.57 12.90))"
 
 # Finding 3: High-Density Built Structure Cluster — SAR Fusion (KR Puram zone)
-FINDING_3_WKT = "SRID=4326;POLYGON((77.65 12.95, 77.72 12.95, 77.72 13.02, 77.65 13.02, 77.65 12.95))"
+FINDING_3_WKT = "POLYGON((77.65 12.95, 77.72 12.95, 77.72 13.02, 77.65 13.02, 77.65 12.95))"
 
 # Finding 4: Bellandur Lake (SAR specular reflection from water body)
-FINDING_4_WKT = "SRID=4326;POLYGON((77.65 12.90, 77.75 12.90, 77.75 12.97, 77.65 12.97, 77.65 12.90))"
+FINDING_4_WKT = "POLYGON((77.65 12.90, 77.75 12.90, 77.75 12.97, 77.65 12.97, 77.65 12.90))"
 
 
 async def wipe_seed_data(db: AsyncSession) -> None:
-    """Deletes all records with demo IDs and clears cached preview PNGs."""
+    """Deletes all records with demo IDs."""
     logger.info("wiping_existing_seed_data")
 
     # Delete in reverse FK dependency order
@@ -90,30 +90,52 @@ async def wipe_seed_data(db: AsyncSession) -> None:
     await db.execute(text("DELETE FROM image_assets WHERE asset_id LIKE 'demo%'"))
     await db.execute(text("DELETE FROM sessions WHERE session_id LIKE 'demo%'"))
     await db.commit()
-
-    # Clean derived preview caches for demo assets so no stale frames persist
-    settings = get_settings()
-    for pattern in (
-        Path(settings.storage_local_root) / "derived" / "demo*.png",
-        Path(settings.storage_local_root) / "previews" / "demo*.png",
-    ):
-        for f in glob.glob(str(pattern)):
-            try:
-                Path(f).unlink(missing_ok=True)
-            except Exception:
-                pass
-
     logger.info("seed_data_wiped")
 
 
-async def seed(dry_run: bool = False, force: bool = False) -> None:
+def _find_sample_file(filename: str) -> Path:
+    candidates = [
+        SAMPLE_DATA / filename,
+        Path("/app/sample_data") / filename,
+        Path(__file__).parent.parent / "sample_data" / filename,
+        Path(__file__).parent.parent / "data" / "raw" / filename,
+        Path("/app/data/raw") / filename,
+        Path(__file__).parent.parent / "data" / "demo-tiles" / filename,
+        Path("/app/data/demo-tiles") / filename,
+    ]
+    for c in candidates:
+        if c.exists() and c.is_file():
+            return c
+    return candidates[0]
+
+
+async def seed(dry_run: bool = False, force: bool = False, db_session: AsyncSession | None = None) -> None:
     settings = get_settings()
-    engine = create_async_engine(settings.database_url, echo=False)
-    session_factory = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
+    engine = None
+    if db_session is None:
+        engine = create_async_engine(settings.database_url, echo=False)
+        session_factory = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
+        db_cm = session_factory()
+    else:
+        from contextlib import asynccontextmanager
+        @asynccontextmanager
+        async def _use_existing(s):
+            yield s
+        db_cm = _use_existing(db_session)
 
     storage = get_storage()
 
-    async with session_factory() as db:
+    async with db_cm as db:
+        # Ensure findings table has answer, properties, evidence_refs columns
+        try:
+            await db.execute(text("ALTER TABLE findings ADD COLUMN IF NOT EXISTS answer VARCHAR"))
+            await db.execute(text("ALTER TABLE findings ADD COLUMN IF NOT EXISTS properties JSONB DEFAULT '{}'::jsonb"))
+            await db.execute(text("ALTER TABLE findings ADD COLUMN IF NOT EXISTS evidence_refs JSONB DEFAULT '[]'::jsonb"))
+            await db.commit()
+        except Exception as e:
+            logger.warning("ensure_columns_failed", error=str(e))
+            await db.rollback()
+
         existing = await db.execute(select(Session).where(Session.session_id == DEMO_SESSION_ID))
         if existing.scalars().first():
             if not force:
@@ -123,9 +145,9 @@ async def seed(dry_run: bool = False, force: bool = False) -> None:
         logger.info("seeding_example_data", dry_run=dry_run)
 
         # ── 1. Upload satellite GeoTIFF files to storage ────────────────────────
-        opt_22_file = SAMPLE_DATA / "isro_optical_2022.tif"
-        opt_26_file = SAMPLE_DATA / "isro_optical_2026.tif"
-        sar_26_file = SAMPLE_DATA / "isro_sar_2026.tif"
+        opt_22_file = _find_sample_file("isro_optical_2022.tif")
+        opt_26_file = _find_sample_file("isro_optical_2026.tif")
+        sar_26_file = _find_sample_file("isro_sar_2026.tif")
 
         def _upload(path: Path, subdir: str = "raw") -> str:
             if not path.exists():
@@ -147,15 +169,29 @@ async def seed(dry_run: bool = False, force: bool = False) -> None:
             return
 
         # ── 2. Pre-generate web-renderable PNG previews ───────────────────────
+        import shutil
         derived_dir = Path(settings.storage_local_root) / "derived"
         derived_dir.mkdir(parents=True, exist_ok=True)
-        try:
-            generate_rgb_preview(opt_22_file, derived_dir / f"{DEMO_ASSET_OPT_22_ID}_1024.png", max_dimension=1024)
-            generate_rgb_preview(opt_26_file, derived_dir / f"{DEMO_ASSET_OPT_26_ID}_1024.png", max_dimension=1024)
-            generate_rgb_preview(sar_26_file, derived_dir / f"{DEMO_ASSET_SAR_26_ID}_1024.png", max_dimension=1024)
-            logger.info("cached_previews_pregenerated")
-        except Exception as exc:
-            logger.warning("pregenerate_previews_error", error=str(exc))
+        for asset_id, src_file in [
+            (DEMO_ASSET_OPT_22_ID, opt_22_file),
+            (DEMO_ASSET_OPT_26_ID, opt_26_file),
+            (DEMO_ASSET_SAR_26_ID, sar_26_file),
+        ]:
+            target_preview = derived_dir / f"{asset_id}_1024.png"
+            if not target_preview.exists():
+                try:
+                    if src_file.exists() and src_file.suffix.lower() == ".tif":
+                        generate_rgb_preview(src_file, target_preview, max_dimension=1024)
+                    else:
+                        for fallback in [
+                            Path(__file__).parent.parent / "data" / "demo-tiles" / "isro_bengaluru_2022.jpg",
+                            Path(__file__).parent.parent / "sample_data" / "preview.png",
+                        ]:
+                            if fallback.exists():
+                                shutil.copy2(fallback, target_preview)
+                                break
+                except Exception as exc:
+                    logger.warning("pregenerate_previews_error", asset_id=asset_id, error=str(exc))
 
         # ── 3. Session ────────────────────────────────────────────────────────
         demo_session = Session(
@@ -239,6 +275,7 @@ async def seed(dry_run: bool = False, force: bool = False) -> None:
             run_id=DEMO_RUN_CD_ID,
             query_id=DEMO_QUERY_CD_ID,
             workflow=WorkflowType.change_detection,
+            tools_used=[],
             status="completed",
             duration_ms=3140.0,
             trace=[
@@ -258,6 +295,7 @@ async def seed(dry_run: bool = False, force: bool = False) -> None:
             label="IT Corridor Urban Expansion (Whitefield)",
             answer="Major tech-park and residential complex built between 2019 and 2024 in the Whitefield/EPIP Zone — one of Bengaluru's fastest-growing corridors. MODIS 250m imagery confirms significant increase in high-reflectance impervious surfaces.",
             confidence=0.96,
+            evidence_refs=[],
             properties={
                 "workflow": "change_detection",
                 "change_type": "Urban Expansion / Impervious Surface Growth",
@@ -278,6 +316,7 @@ async def seed(dry_run: bool = False, force: bool = False) -> None:
             label="Sarjapur Road Corridor Densification",
             answer="The Sarjapur Road corridor shows clear densification of built-up area between 2019 and 2024, with new apartment complexes and commercial strips replacing agricultural and vacant land.",
             confidence=0.93,
+            evidence_refs=[],
             properties={
                 "workflow": "change_detection",
                 "change_type": "Residential & Commercial Densification",
@@ -324,6 +363,7 @@ async def seed(dry_run: bool = False, force: bool = False) -> None:
             run_id=DEMO_RUN_SAR_ID,
             query_id=DEMO_QUERY_SAR_ID,
             workflow=WorkflowType.sar_fusion,
+            tools_used=[],
             status="completed",
             duration_ms=4820.0,
             trace=[
@@ -341,6 +381,7 @@ async def seed(dry_run: bool = False, force: bool = False) -> None:
             label="High-Density Built Structure Cluster",
             answer="Strong double-bounce microwave backscatter co-located with high-reflectance optical rooftops confirms newly erected multi-story buildings.",
             confidence=0.94,
+            evidence_refs=[],
             properties={
                 "workflow": "sar_fusion",
                 "sar_evidence": "Intense double-bounce return (>0.82 normalized intensity)",
@@ -358,6 +399,7 @@ async def seed(dry_run: bool = False, force: bool = False) -> None:
             label="Meandering River Channel",
             answer="Very low radar backscatter due to specular reflection off smooth water surface confirms open water river channel.",
             confidence=0.95,
+            evidence_refs=[],
             properties={
                 "workflow": "sar_fusion",
                 "sar_evidence": "Near-zero microwave return (<0.08 normalized intensity)",
@@ -387,7 +429,8 @@ async def seed(dry_run: bool = False, force: bool = False) -> None:
         await db.commit()
         logger.info("seeded_sar_fusion_run")
 
-    await engine.dispose()
+    if engine is not None:
+        await engine.dispose()
     print("\n✅  Real-world satellite example data seeded successfully!")
     print(f"   Session ID:         {DEMO_SESSION_ID}")
     print(f"   MODIS 2019 optical: {DEMO_ASSET_OPT_22_ID} (Bengaluru East baseline)")

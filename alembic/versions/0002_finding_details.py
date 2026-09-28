@@ -21,8 +21,13 @@ depends_on: Union[str, Sequence[str], None] = None
 
 def upgrade() -> None:
     # Add answer (VQA / captioning text) and properties (bounding_boxes, change_classes, etc.)
-    op.add_column("findings", sa.Column("answer", sa.String(), nullable=True))
-    op.add_column("findings", sa.Column("properties", postgresql.JSONB(astext_type=sa.Text()), nullable=True, server_default="{}"))
+    conn = op.get_bind()
+    inspector = sa.inspect(conn)
+    existing_cols = [c["name"] for c in inspector.get_columns("findings")]
+    if "answer" not in existing_cols:
+        op.add_column("findings", sa.Column("answer", sa.String(), nullable=True))
+    if "properties" not in existing_cols:
+        op.add_column("findings", sa.Column("properties", postgresql.JSONB(astext_type=sa.Text()), nullable=True, server_default="{}"))
 
 
 def downgrade() -> None:
