@@ -48,8 +48,8 @@ services:
     environment:
       DATABASE_URL: postgresql+asyncpg://satquery:satquery_secure_pass_2026@db:5432/satquery_db
     volumes:
-      - satquery_data:/app/data
-      - ./data/weights:/app/data/weights:ro
+      - ./data:/app/data
+      - ./sample_data:/app/sample_data:ro
     depends_on:
       db:
         condition: service_healthy
@@ -70,8 +70,8 @@ services:
     environment:
       DATABASE_URL: postgresql+asyncpg://satquery:satquery_secure_pass_2026@db:5432/satquery_db
     volumes:
-      - satquery_data:/app/data
-      - ./data/weights:/app/data/weights:ro
+      - ./data:/app/data
+      - ./sample_data:/app/sample_data:ro
     depends_on:
       db:
         condition: service_healthy

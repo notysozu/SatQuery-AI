@@ -298,10 +298,31 @@ def _resolve_image(sample_id: str) -> pathlib.Path | None:
     p = DEMO_IMAGE_MAP.get(sample_id)
     if p and p.exists():
         return p
-    # Best-effort fallback: first existing image in the map
+    search_dirs = [
+        PROJECT_ROOT / "data" / "demo-tiles",
+        PROJECT_ROOT / "data" / "derived",
+        PROJECT_ROOT / "frontend" / "public" / "demo-tiles",
+        PROJECT_ROOT / "sample_data",
+        PROJECT_ROOT / "satquery_backend" / "sample_data",
+    ]
+    for d in search_dirs:
+        if not d.exists():
+            continue
+        for ext in ["", ".jpg", ".png", ".tif", ".jpeg"]:
+            cand = d / f"{sample_id}{ext}"
+            if cand.exists() and cand.is_file():
+                return cand
+        for f in d.iterdir():
+            if sample_id in f.name and f.is_file():
+                return f
     for v in DEMO_IMAGE_MAP.values():
         if v.exists():
             return v
+    for d in search_dirs:
+        if d.exists():
+            for f in d.iterdir():
+                if f.is_file() and f.suffix.lower() in [".jpg", ".png", ".tif", ".jpeg"]:
+                    return f
     return None
 
 
